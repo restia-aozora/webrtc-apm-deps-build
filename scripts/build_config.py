@@ -28,11 +28,19 @@ JNI_EXPORTS = {
 def select_abis(platform, selection):
     if platform not in ('android', 'ios', 'harmony', 'host'):
         raise ValueError(f'Unknown target platform: {platform}')
-    if selection not in (*ANDROID_ABIS, 'all'):
-        raise ValueError(f'Unknown Android ABI: {selection}')
     if platform != 'android':
         return ['arm64-v8a']
-    return list(ANDROID_ABIS) if selection == 'all' else [selection]
+    selected_abis = [selection] if isinstance(selection, str) else list(selection)
+    if not selected_abis:
+        raise ValueError('Select at least one Android ABI')
+    if selected_abis == ['all']:
+        return list(ANDROID_ABIS)
+    for selected_abi in selected_abis:
+        if selected_abi == 'all':
+            raise ValueError('Android ABI all cannot be combined with explicit ABIs')
+        if selected_abi not in ANDROID_ABIS:
+            raise ValueError(f'Unknown Android ABI: {selected_abi}')
+    return [abi for abi in ANDROID_ABIS if abi in selected_abis]
 
 
 def quote(value):

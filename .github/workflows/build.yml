@@ -9,12 +9,21 @@ on:
         type: choice
         default: all
         options: [all, android, ios, harmony]
-      android_abis:
-        description: Android ABI selection (ignored for iOS and Harmony)
-        required: true
-        type: choice
-        default: arm64-v8a
-        options: [arm64-v8a, all, armeabi-v7a, x86]
+      android_arm64:
+        description: Build Android ARM64 (arm64-v8a; ignored for iOS and Harmony)
+        required: false
+        type: boolean
+        default: true
+      android_armv7:
+        description: Build Android ARMv7 (armeabi-v7a; ignored for iOS and Harmony)
+        required: false
+        type: boolean
+        default: false
+      android_x86:
+        description: Build Android x86 (ignored for iOS and Harmony)
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -38,6 +47,29 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
+      - name: Resolve Android ABI selection
+        id: android_abis
+        shell: bash
+        env:
+          ANDROID_ARM64: ${{ inputs.android_arm64 }}
+          ANDROID_ARMV7: ${{ inputs.android_armv7 }}
+          ANDROID_X86: ${{ inputs.android_x86 }}
+        run: |
+          selected_abis=()
+          if [[ "$ANDROID_ARM64" == "true" ]]; then
+            selected_abis+=(arm64-v8a)
+          fi
+          if [[ "$ANDROID_ARMV7" == "true" ]]; then
+            selected_abis+=(armeabi-v7a)
+          fi
+          if [[ "$ANDROID_X86" == "true" ]]; then
+            selected_abis+=(x86)
+          fi
+          if (( ${#selected_abis[@]} == 0 )); then
+            echo '::error::Select at least one Android ABI.'
+            exit 1
+          fi
+          echo "abis=${selected_abis[*]}" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-python@v7.0.0
         with:
@@ -51,10 +83,11 @@ jobs:
         run: sdkmanager 'ndk;27.2.12479018'
       - name: Build Android libraries
         env:
-          SELECTED_ABIS: ${{ inputs.android_abis }}
+          SELECTED_ABIS: ${{ steps.android_abis.outputs.abis }}
         run: |
           export ANDROID_NDK_HOME="${ANDROID_HOME:?Android SDK is missing}/ndk/27.2.12479018"
-          python scripts/build.py android --android-abis "$SELECTED_ABIS" --jobs 2
+          read -r -a selected_abis <<< "$SELECTED_ABIS"
+          python scripts/build.py android --android-abis "${selected_abis[@]}" --jobs 2
       - uses: actions/upload-artifact@v7.0.1
         with:
           name: webrtc-apm-android-${{ github.run_id }}
@@ -97,8 +130,16 @@ jobs:
           HARMONY_SDK_URL: ${{ secrets.HARMONY_SDK_URL }}
           HARMONY_SDK_SHA256: ${{ vars.HARMONY_SDK_SHA256 }}
         run: |
-          if [[ -z "$HARMONY_SDK_URL" || ! "$HARMONY_SDK_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
-            echo '::error::Configure HARMONY_SDK_URL secret and HARMONY_SDK_SHA256 variable in THIS repository.'
+          if [[ -z "$HARMONY_SDK_URL" ]]; then
+            echo "::error::Missing HARMONY_SDK_URL repository secret. Add it at https://github.com/${GITHUB_REPOSITORY}/settings/secrets/actions. Secrets from another repository are not inherited."
+            exit 1
+          fi
+          if [[ ! "$HARMONY_SDK_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo '::error::Invalid HARMONY_SDK_SHA256 repository variable. Set the expected SDK archive SHA-256 as 64 lowercase hexadecimal characters.'
+            exit 1
+          fi
+          if [[ "$HARMONY_SDK_URL" != https://* ]]; then
+            echo '::error::HARMONY_SDK_URL must use HTTPS. Set the complete authorized Linux SDK download URL as the repository secret.'
             exit 1
           fi
       - run: python -m pip install -r requirements-build.txt

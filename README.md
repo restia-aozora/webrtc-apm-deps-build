@@ -26,8 +26,10 @@ does not capture or play audio by itself.
 1. Open Actions, then **Build WebRTC APM native libraries**.
 2. Choose **Run workflow** on the latest `main`.
 3. Select `all` (default), `android`, `ios`, or `harmony`.
-4. Keep `android_abis=arm64-v8a` for the smallest Android package, or choose `all`
-   to build ARM64, ARMv7 and x86 together.
+4. Check any combination of `android_arm64` (ARM64), `android_armv7` (ARMv7),
+   and `android_x86` (x86). Only ARM64 is checked by default. Select at least
+   one ABI when building Android; the checkboxes are ignored for iOS and Harmony.
+   Choosing platform `all` builds all three platforms, not all Android ABIs.
 5. Download the platform artifact from that run. Retention is seven days.
 
 Platform jobs are independent. One failure does not cancel the others. A
@@ -50,6 +52,15 @@ again here; do not post it in an issue or commit its query parameters. The scrip
 verifies the archive and only extracts the Native SDK subtree. A `.har` package
 or a Windows/macOS host SDK is not a Linux C/C++ toolchain. A local Linux build
 may instead set `OHOS_SDK_NATIVE_DIR` to an already installed Native SDK.
+
+If a run reports `Missing HARMONY_SDK_URL`, open
+[this repository's Actions secrets](https://github.com/restia-aozora/webrtc-apm-deps-build/settings/secrets/actions),
+choose **New repository secret**, enter `HARMONY_SDK_URL` as the name, and
+paste a current, authorized HTTPS SDK download URL as the value without quotes.
+The checksum belongs in the separate `HARMONY_SDK_SHA256` variable; a valid
+checksum does not replace the download URL. This error is a configuration
+preflight failure, not a native compiler failure. Start a new workflow run on
+the updated `main` after configuring the secret to use the current inputs.
 
 ## Integration
 
@@ -108,6 +119,7 @@ pinned upstream commit and never edits an existing source checkout.
 python -m pip install -r requirements-build.txt
 python -m unittest discover -s tests -p 'test_*.py' -v
 python scripts/build.py android --android-abis arm64-v8a --jobs 3
+python scripts/build.py android --android-abis arm64-v8a armeabi-v7a --jobs 3
 python scripts/build.py ios --jobs 3
 python scripts/build.py harmony --jobs 3
 python scripts/build.py host --jobs 3

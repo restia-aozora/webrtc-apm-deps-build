@@ -116,13 +116,20 @@ def package_elf(build, output, platform, abi, tools, native=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('platform', choices=('android', 'ios', 'harmony', 'host'))
-    parser.add_argument('--android-abis', choices=('arm64-v8a', 'armeabi-v7a', 'x86', 'all'), default='arm64-v8a')
+    parser.add_argument('--android-abis', nargs='+',
+                        choices=('arm64-v8a', 'armeabi-v7a', 'x86', 'all'),
+                        default=['arm64-v8a'],
+                        help='One or more Android ABIs, or all (default: arm64-v8a)')
     parser.add_argument('--jobs', type=int, default=3)
     parser.add_argument('--source-repository', default=SOURCE_URL,
                         help='Optional local clone, read-only; the pinned commit is still required')
     arguments = parser.parse_args()
     if arguments.jobs < 1:
         parser.error('jobs must be positive')
+    try:
+        selected_abis = select_abis(arguments.platform, arguments.android_abis)
+    except ValueError as error:
+        parser.error(str(error))
     if arguments.platform == 'ios' and sys.platform != 'darwin':
         parser.error('iOS requires macOS and Xcode; use the GitHub macOS job')
     if arguments.platform in ('host', 'harmony') and sys.platform != 'linux':
@@ -156,7 +163,7 @@ def main():
     manifest = {'platform': arguments.platform, 'source': LOCK['source'],
                 'dependencyLock': LOCK, 'features': ['AEC3', 'NS', 'AGC2', 'voice-detection'],
                 'runtimeValidation': 'NOT RUN', 'utsValidation': 'NOT RUN', 'checks': {}}
-    for abi in select_abis(arguments.platform, arguments.android_abis):
+    for abi in selected_abis:
         build = work / ('build-' + abi)
         cross = work / (abi + '.ini')
         if arguments.platform == 'android':
