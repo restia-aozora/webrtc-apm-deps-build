@@ -1,0 +1,115 @@
+name: Build WebRTC APM native libraries
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to build (all runs all three platforms)
+        required: true
+        type: choice
+        default: all
+        options: [all, android, ios, harmony]
+      android_abis:
+        description: Android ABI selection (ignored for iOS and Harmony)
+        required: true
+        type: choice
+        default: arm64-v8a
+        options: [arm64-v8a, all, armeabi-v7a, x86]
+
+permissions:
+  contents: read
+
+jobs:
+  host-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-build.txt
+      - run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Build and run host C API smoke
+        run: python scripts/build.py host --jobs 2
+
+  build-android:
+    if: inputs.platform == 'all' || inputs.platform == 'android'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.12'
+      - uses: android-actions/setup-android@v4.0.4
+        with:
+          packages: 'platform-tools'
+          log-accepted-android-sdk-licenses: false
+      - run: python -m pip install -r requirements-build.txt
+      - name: Install locked Android NDK
+        run: sdkmanager 'ndk;27.2.12479018'
+      - name: Build Android libraries
+        env:
+          SELECTED_ABIS: ${{ inputs.android_abis }}
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_HOME:?Android SDK is missing}/ndk/27.2.12479018"
+          python scripts/build.py android --android-abis "$SELECTED_ABIS" --jobs 2
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: webrtc-apm-android-${{ github.run_id }}
+          path: dist/webrtc-apm-android.zip*
+          if-no-files-found: error
+          retention-days: 7
+
+  build-ios:
+    if: inputs.platform == 'all' || inputs.platform == 'ios'
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-build.txt
+      - name: Verify Apple toolchain
+        run: xcodebuild -version
+      - name: Build iPhoneOS ARM64 framework
+        run: python scripts/build.py ios --jobs 3
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: webrtc-apm-ios-${{ github.run_id }}
+          path: dist/webrtc-apm-ios.zip*
+          if-no-files-found: error
+          retention-days: 7
+
+  build-harmony:
+    if: inputs.platform == 'all' || inputs.platform == 'harmony'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Verify Harmony SDK configuration
+        env:
+          HARMONY_SDK_URL: ${{ secrets.HARMONY_SDK_URL }}
+          HARMONY_SDK_SHA256: ${{ vars.HARMONY_SDK_SHA256 }}
+        run: |
+          if [[ -z "$HARMONY_SDK_URL" || ! "$HARMONY_SDK_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo '::error::Configure HARMONY_SDK_URL secret and HARMONY_SDK_SHA256 variable in THIS repository.'
+            exit 1
+          fi
+      - run: python -m pip install -r requirements-build.txt
+      - name: Build Harmony ARM64 library and N-API bridge
+        env:
+          HARMONY_SDK_URL: ${{ secrets.HARMONY_SDK_URL }}
+          HARMONY_SDK_SHA256: ${{ vars.HARMONY_SDK_SHA256 }}
+        run: python scripts/build.py harmony --jobs 2
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: webrtc-apm-harmony-${{ github.run_id }}
+          path: dist/webrtc-apm-harmony.zip*
+          if-no-files-found: error
+          retention-days: 7

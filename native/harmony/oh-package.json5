@@ -1,0 +1,7 @@
+{
+  "name": "libaozora_apm.so",
+  "version": "1.0.0",
+  "description": "Type declarations for the Aozora WebRTC APM native module",
+  "types": "./index.d.ts",
+  "license": "BSD-3-Clause"
+}
