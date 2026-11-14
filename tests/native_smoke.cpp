@@ -81,6 +81,19 @@ int main() {
                     AOZORA_APM_ERROR_INVALID_FRAME,
                 "reject empty frame");
 
+        // The upstream analysis-only reverse path may leave its destination
+        // unwritten. A successful wrapper call must not replace PCM with zeros.
+        for (size_t sampleIndex = 0; sampleIndex < frameSamples; ++sampleIndex) {
+          render[sampleIndex] = static_cast<int16_t>(
+              static_cast<int>(sampleIndex % 37) * 113 - 1800);
+        }
+        const auto originalRender = render;
+        require(isAcceptedStatus(aozora_apm_process_reverse(
+                    processor, render.data(), frameSamples)),
+                "process nonzero analysis-only render frame");
+        require(render == originalRender,
+                "analysis-only reverse must preserve nonzero reference PCM");
+
         aozora_apm_set_stream_delay_ms(processor, -10);
         for (int frameIndex = 0; frameIndex < 30; ++frameIndex) {
           render.fill(0);
