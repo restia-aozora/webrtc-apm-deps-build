@@ -70,6 +70,54 @@ class BuildConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             configuration.harmony_cross_file(Path('/sdk/bad\npath'))
 
+    def test_additive_statistics_exports_retain_existing_abi(self):
+        configuration = self.load_config()
+        old_exports = {
+            'aozora_apm_create', 'aozora_apm_destroy', 'aozora_apm_process_reverse',
+            'aozora_apm_process_capture', 'aozora_apm_set_stream_delay_ms',
+            'aozora_apm_get_voice_detected', 'aozora_apm_frame_samples',
+        }
+        self.assertTrue(old_exports <= configuration.C_EXPORTS)
+        for platform in ('host', 'android', 'ios', 'harmony'):
+            with self.subTest(platform=platform):
+                _, export_map = configuration.wrapper_meson(platform)
+                self.assertIn('    aozora_apm_get_build_revision;\n', export_map)
+                self.assertIn('    aozora_apm_get_statistics;\n', export_map)
+        _, android_exports = configuration.wrapper_meson('android')
+        for method in ('nativeGetBuildRevision', 'nativeGetStatistics'):
+            self.assertIn('Java_com_aozora_audio_AozoraWebRtcApm_' + method + ';',
+                          android_exports)
+
+    def test_host_build_explicitly_compiles_all_registered_tests(self):
+        import build
+        commands = []
+        with patch.object(build, 'run', side_effect=lambda *args, **kwargs: commands.append(args)):
+            build.configure_build('source', 'build', None, 3, {}, 'host')
+        compile_command = commands[-1]
+        for target in ('apm_smoke', 'apm_statistics', 'apm_echo_regression'):
+            self.assertIn(target, compile_command)
+        configuration = self.load_config()
+        meson, _ = configuration.wrapper_meson('host')
+        self.assertIn("test('native-statistics-contract'", meson)
+        self.assertIn("test('native-echo-regression'", meson)
+        self.assertNotIn('should_fail:', meson)
+        for fault in ('disconnect-reference', 'zero-output'):
+            self.assertRegex(meson, r"test\('native-echo-" + fault +
+                             r"', mutation_python[^\n]+mutation_runner, echo_regression")
+
+    def test_cross_platform_builds_do_not_compile_host_test_programs(self):
+        import build
+        configuration = self.load_config()
+        for platform in ('android', 'ios', 'harmony'):
+            with self.subTest(platform=platform):
+                commands = []
+                with patch.object(build, 'run', side_effect=lambda *args, **kwargs: commands.append(args)):
+                    build.configure_build('source', 'build', 'cross', 3, {}, platform)
+                self.assertEqual(commands[-1][-1], 'aozora_apm')
+                meson, _ = configuration.wrapper_meson(platform)
+                self.assertNotIn('executable(', meson)
+                self.assertNotIn('test(', meson)
+
 
 if __name__ == '__main__':
     unittest.main()

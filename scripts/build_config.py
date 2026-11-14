@@ -17,12 +17,17 @@ C_EXPORTS = {
     'aozora_apm_create', 'aozora_apm_destroy', 'aozora_apm_process_reverse',
     'aozora_apm_process_capture', 'aozora_apm_set_stream_delay_ms',
     'aozora_apm_get_voice_detected', 'aozora_apm_frame_samples',
+    'aozora_apm_get_build_revision', 'aozora_apm_get_statistics',
 }
 JNI_EXPORTS = {
     'Java_com_aozora_audio_AozoraWebRtcApm_' + method for method in (
         'nativeCreate', 'nativeRelease', 'nativeProcessReverse',
-        'nativeProcessCapture', 'nativeSetStreamDelay', 'nativeGetVoiceDetected')
+        'nativeProcessCapture', 'nativeSetStreamDelay', 'nativeGetVoiceDetected',
+        'nativeGetBuildRevision', 'nativeGetStatistics')
 }
+HOST_TEST_TARGETS = ('apm_smoke', 'apm_statistics', 'apm_echo_regression')
+HOST_TEST_SOURCES = ('native_smoke.cpp', 'native_statistics.cpp', 'native_echo_regression.cpp',
+                     'native_echo_mutation_runner.py')
 
 
 def select_abis(platform, selection):
@@ -153,6 +158,14 @@ def wrapper_meson(platform):
         statements += [
             "smoke = executable('apm_smoke', 'native_smoke.cpp', link_with: wrapper)",
             "test('native-api-smoke', smoke, timeout: 120)",
+            "statistics = executable('apm_statistics', 'native_statistics.cpp', link_with: wrapper)",
+            "test('native-statistics-contract', statistics, timeout: 120)",
+            "echo_regression = executable('apm_echo_regression', 'native_echo_regression.cpp', link_with: wrapper)",
+            "test('native-echo-regression', echo_regression, timeout: 180)",
+            "mutation_python = import('python').find_installation()",
+            "mutation_runner = files('native_echo_mutation_runner.py')[0]",
+            "test('native-echo-disconnect-reference', mutation_python, args: [mutation_runner, echo_regression, 'disconnect-reference'], timeout: 400)",
+            "test('native-echo-zero-output', mutation_python, args: [mutation_runner, echo_regression, 'zero-output'], timeout: 400)",
         ]
     export_map = '{\n  global:\n' + ''.join(f'    {symbol};\n' for symbol in exports) + '  local: *;\n};\n'
     return '\n'.join(statements) + '\n', export_map

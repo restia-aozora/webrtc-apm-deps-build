@@ -10,7 +10,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-from build_config import (ANDROID_API, ANDROID_NDK, IOS_MINIMUM, SOURCE_COMMIT,
+from build_config import (ANDROID_API, ANDROID_NDK, HOST_TEST_SOURCES, HOST_TEST_TARGETS,
+                          IOS_MINIMUM, SOURCE_COMMIT,
                           SOURCE_URL, android_cross_file, harmony_cross_file,
                           ios_cross_file, ndk_tools, patch_crc_dependency,
                           select_abis, wrapper_meson)
@@ -32,7 +33,8 @@ def prepare_source(work, platform, source_repository):
     wrapper = source / 'aozora-wrapper'
     shutil.copytree(ROOT / 'native', wrapper)
     if platform == 'host':
-        copy_file(ROOT / 'tests/native_smoke.cpp', wrapper / 'native_smoke.cpp')
+        for filename in HOST_TEST_SOURCES:
+            copy_file(ROOT / 'tests' / filename, wrapper / filename)
     build_definition, export_map = wrapper_meson(platform)
     (wrapper / 'meson.build').write_text(build_definition, encoding='utf-8')
     (wrapper / 'exports.map').write_text(export_map, encoding='utf-8')
@@ -49,9 +51,9 @@ def configure_build(source, build, cross, jobs, environment, platform):
     if cross is not None:
         command += ['--cross-file', cross]
     run(*command, environment=environment)
-    target = 'apm_smoke' if platform == 'host' else 'aozora_apm'
+    targets = HOST_TEST_TARGETS if platform == 'host' else ('aozora_apm',)
     run(sys.executable, '-m', 'mesonbuild.mesonmain', 'compile', '-C', build,
-        '-j', jobs, target, environment=environment)
+        '-j', jobs, *targets, environment=environment)
 
 
 def package_ios(build, work, output, sdk):
@@ -161,6 +163,7 @@ def main():
         sdk = run('xcrun', '--sdk', 'iphoneos', '--show-sdk-path', capture=True).strip()
     source = prepare_source(work, arguments.platform, arguments.source_repository)
     manifest = {'platform': arguments.platform, 'source': LOCK['source'],
+                'wrapperCommit': run('git', '-C', ROOT, 'rev-parse', 'HEAD', capture=True).strip(),
                 'dependencyLock': LOCK, 'features': ['AEC3', 'NS', 'AGC2', 'voice-detection'],
                 'runtimeValidation': 'NOT RUN', 'utsValidation': 'NOT RUN', 'checks': {}}
     for abi in selected_abis:
@@ -177,8 +180,9 @@ def main():
         configure_build(source, build, cross, arguments.jobs, environment, arguments.platform)
         if arguments.platform == 'host':
             run(sys.executable, '-m', 'mesonbuild.mesonmain', 'test', '-C', build,
-                '--print-errorlogs', environment=environment)
-            print('Host API smoke PASSED; this is not device or acoustic validation.', flush=True)
+                '--verbose', '--print-errorlogs', environment=environment)
+            print('Host native contracts and synthetic controls PASSED; '
+                  'this is not device or human acoustic validation.', flush=True)
             return
         if arguments.platform == 'ios':
             manifest['checks'][abi] = package_ios(build, work, output, sdk)
