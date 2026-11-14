@@ -387,3 +387,72 @@ positive predicate detections, runtime, JNI behavior and final artifacts still
 require the parent's approved host/runtime validation. No git staging, commit,
 push, GitHub/CI operation, application edit, manual-probe edit, upstream/cache
 modification, audio I/O or device use occurred in this review round.
+
+## Test-only numeric diagnostics after host failure (2026-11-14)
+
+This is instrumentation, NOT a fix. The supplied host result at wrapper HEAD
+2e860a3 remains the evidence: double-talk gain 0.299, correlation 0.598 and
+alignment 128 samples, versus near-only gain 0.930. Root cause is not established.
+No new real-library host execution was performed in this diagnostic round.
+
+Only tests/native_echo_regression.cpp and this report were edited. The ledger,
+production/upstream code, fixture seeds/amplitudes/durations, NS/AGC/VAD/delay,
+original five scenario calls, original measurement function/window, thresholds,
+acceptance assertions and mutation protocol were not changed. NearOnly still
+uses ReferenceMode::Disconnected and therefore submits no reverse frames.
+Reference connection no longer depends on CaptureMode; the existing fault gate
+and ReferenceMode gate retain their original behavior for all five old calls.
+
+Only normal faultMode None executes the added diagnostics, before the original
+acceptance assertions. Output contains numbers only, with no independent PASS:
+
+- Raw near and echo energy over [20,28)s and their energy ratio in dB.
+- Baseline double-talk in each of eight full one-second bins [20,21) through
+  [27,28): best positive-correlation lag within 0..480, gain/correlation, fixed
+  128-sample-lag gain, and raw input near/echo energy ratio. The diagnostic near
+  copy is zero before 20s to match submitted input at onset; the original near
+  fixture and main [21,27.97)s measurement remain untouched.
+- A: matched reverse throughout, capture silent for 20s then unchanged near
+  without echo for 8s.
+- B: matched reverse throughout, capture echo for 20s then unchanged near
+  without echo for 8s. Echo removal changes the path, so this is a diagnostic
+  control rather than a replacement baseline.
+
+A and B each create a separate APM with NS=0, AGC=0 and delay=40ms. Existing
+finite/unclipped quantization and strict create/process/configuration checks
+remain active. A final statistics check for these two modes additionally
+requires 16000Hz, 2800 capture and 2800 reverse frames, delay40 and NS/AGC zero.
+Each reports the unchanged original-window projection; neither can override
+the original failing double-talk predicate or supply a new success verdict.
+
+The new diagnostic lag helpers have an in-executable sanity assertion using a
+deterministic vector with exact gain 0.625 and delay128. Both fixed-lag and
+best-lag estimates must recover gain0.625/correlation1 within 1e-12 and the
+best lag must be128. The assertion was added before the helper definitions;
+the first ARM64 syntax run exited1 with the two expected undeclared-helper
+errors. This is compile-red evidence only, not execution of the sanity check.
+The original measurement was not refactored. The sanity assertion itself still
+requires actual host execution, together with the diagnostic scenarios and
+confirmation that the original failure remains a failure.
+
+Fresh local verification commands (all run without remote/device/audio I/O):
+
+    & "D:\包\webrtc-apm-deps-20260902\android-ndk-r27c\toolchains\llvm\prebuilt\windows-x86_64\bin\clang++.exe" --target=<target> -std=c++17 -Wall -Wextra -Werror -fsyntax-only -I native tests/native_echo_regression.cpp
+
+Targets aarch64-linux-android28, armv7a-linux-androideabi28 and
+i686-linux-android28 each returned exit0 with no diagnostics after the helpers
+were added. Python regression command:
+
+    python -B -m unittest discover -s tests -q
+
+Observed exit0: Ran41 tests, OK (skipped=1), i.e.40 passed and1 skipped.
+These are syntax/Python checks, not native linked runtime or effect acceptance.
+The parent must review the narrow diff and run the actual host executable to
+obtain the new numbers. No commit, staging, push, gh/CI or remote operation was
+performed; no PCM was saved.
+
+After the final frame/configuration guard was added, all three ABI syntax
+commands were repeated and returned exit0. The final Python rerun reported
+Ran41 tests in3.331s, OK (skipped=1), exit0. Scoped git diff --check returned
+exit0. ReadLints returned no diagnostics for the changed C++ path (the IDE
+reported totalFiles=0, so this is not a substitute for compiler verification).

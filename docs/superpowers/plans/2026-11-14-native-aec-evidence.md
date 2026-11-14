@@ -61,9 +61,11 @@ This plan is also the execution ledger; do not repeat completed tasks.
 - [x] Implement minimal reverse repair and additive statistics/JNI contract.
 - [ ] Run native green, controls and configuration tests; independent review.
 - [x] Connect low-frequency application diagnostics with compatibility tests.
-- [ ] Final cross-boundary review and fresh regression run.
-- [ ] Push reviewed commits and dispatch Android ARM64/ARMv7/x86 packaging.
-- [ ] Verify final run and artifacts; report remaining device validation.
+- [x] Final cross-boundary source review and fresh application/Python regression.
+- [x] Push reviewed commits and dispatch Android ARM64/ARMv7/x86 packaging.
+- [x] Verify run and archive integrity; retain failed host quality gate below.
+- [ ] Investigate double-talk preservation failure without changing acceptance.
+- [ ] Pass native effect gate before any application binary replacement.
 
 ## Evidence and limitations
 
@@ -141,3 +143,49 @@ resampling, VAD, trace and player tests plus the new optional diagnostics tests.
 No real Android JNI load, full APK build or device acoustics was exercised.
 User additionally requires no subagent to use a questioning tool; all subsequent
 delegations explicitly carry that constraint.
+
+### Actual native runtime and Android packaging: gate blocked
+
+Implementation commit: 2e860a3852e9db9bb29cef55d3c2a50f84ccbc5c.
+Lightweight checks run 43580557240 passed. Manual build run 43580576364:
+https://github.com/restia-aozora/webrtc-apm-deps-build/actions/runs/43580576364
+
+The host job 132404239894 compiled and linked the real pinned WebRTC library.
+API smoke now passed, including the previously red nonzero reverse check.
+Frozen statistics v1 also passed. The synthetic effect test FAILED:
+
+- Matched echo attenuation: 18.881 dB; disconnected: 0.133; wrong: 0.134.
+- Near-only: gain 0.930, correlation 0.941, alignment 64 samples.
+- Double-talk: gain 0.299, correlation 0.598, alignment 128 samples.
+- Double-talk gain failed both >= 0.40 and >= 60% of near-only (0.558).
+- Disconnect mutation correctly rejected an unrelated baseline near failure.
+- Zero-output mutation passed its explicit detection controls, but this does
+  not turn a failing baseline into a successful effect test.
+
+Overall host: 3 passed, 2 failed; overall workflow failure is retained.
+Do not relax thresholds, suppress assertions or describe this as native green.
+Source review found no new implementation defects; this is separate from the
+failed runtime quality gate. No simple alignment error has been established.
+The no-reference near-only case does not exercise the active AEC path, and
+synthetic modulated noise is not a human speech/device acceptance fixture.
+Numeric-only active-reference controls and time windows are the next bounded
+investigation; production processing/configuration and original criteria stay
+unchanged.
+
+Android job 132404239619 PASSED and packaged all three existing ABIs. Artifact:
+webrtc-apm-android-43580576364, id 14108526928. The archive was downloaded into
+ignored .work/delivery-43580576364 for inspection only. Archive SHA-256:
+eb980e4142cddcfa5b350b032bdf7788b51b6fbbfe6d8c92f79bf8be368e8449.
+
+The local verifier checked archive and per-file hashes, complete manifest,
+wrapperCommit, pinned upstream, safe paths, ABI set, all old/new C/JNI exports,
+native-apm-v2-stats1 identity, ELF machines/dependencies and >= 16 KB LOAD
+alignment with actual NDK readelf/nm tools; exit 0. Library SHA-256 values:
+
+- arm64-v8a: e4de1fb64654530cf23e6a8a86b931ead76eb6563590c07b9bf21a49bc1ccd59
+- armeabi-v7a: 26e4cad7fb59caae95a9694df45910251fa05ef685e9b7ea939e17f5424faa1e
+- x86: ac66e780b4c5863a11f249f3ae2147d485aa802b9e3a6cfe4a2458282fa456ee
+
+Archive integrity/packaging success does not satisfy the failed effect gate.
+No application .so has been replaced, no Android JNI/APK runtime was tested,
+and the reported phone false onset has NOT been shown fixed.

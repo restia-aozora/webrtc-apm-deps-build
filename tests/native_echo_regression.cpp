@@ -21,7 +21,13 @@ constexpr size_t kEchoDelaySamples = 640;
 constexpr double kPi = 3.14159265358979323846;
 
 enum class ReferenceMode { Matched, Disconnected, Wrong };
-enum class CaptureMode { EchoOnly, NearOnly, DoubleTalk };
+enum class CaptureMode {
+  EchoOnly,
+  NearOnly,
+  DoubleTalk,
+  ActiveReferenceNearAfterSilence,
+  ActiveReferenceNearAfterEchoTraining
+};
 enum class FaultMode { None, DisconnectReference, ZeroOutput };
 
 void require(bool condition, const char* message) {
@@ -98,15 +104,17 @@ std::vector<double> runProcessor(const std::vector<double>& render,
       const size_t sampleIndex = frameStart + frameOffset;
       const bool nearActive = sampleIndex >= kAdaptationSamples;
       const double nearSample = nearActive ? nearSignal[sampleIndex] : 0.0;
-      const double echoSample = captureMode == CaptureMode::NearOnly ? 0.0 : echo[sampleIndex];
+      const bool includeEcho = captureMode != CaptureMode::NearOnly &&
+          captureMode != CaptureMode::ActiveReferenceNearAfterSilence &&
+          (captureMode != CaptureMode::ActiveReferenceNearAfterEchoTraining || !nearActive);
+      const double echoSample = includeEcho ? echo[sampleIndex] : 0.0;
       captureFrame[frameOffset] = quantize(echoSample +
           (captureMode == CaptureMode::EchoOnly ? 0.0 : nearSample));
       reverseFrame[frameOffset] = quantize(referenceMode == ReferenceMode::Wrong
           ? wrongReference[sampleIndex] : render[sampleIndex]);
     }
     // Faults exist only here, never in the wrapper or upstream implementation.
-    const bool connectReference = captureMode != CaptureMode::NearOnly &&
-        referenceMode != ReferenceMode::Disconnected &&
+    const bool connectReference = referenceMode != ReferenceMode::Disconnected &&
         faultMode != FaultMode::DisconnectReference;
     if (connectReference) {
       require(isAccepted(aozora_apm_process_reverse(
@@ -120,6 +128,18 @@ std::vector<double> runProcessor(const std::vector<double>& render,
     for (size_t frameOffset = 0; frameOffset < kFrameSamples; ++frameOffset) {
       output[frameStart + frameOffset] = captureFrame[frameOffset];
     }
+  }
+  if (captureMode == CaptureMode::ActiveReferenceNearAfterSilence ||
+      captureMode == CaptureMode::ActiveReferenceNearAfterEchoTraining) {
+    AozoraApmStatistics finalStatistics{};
+    require(aozora_apm_get_statistics(processor.get(), &finalStatistics, sizeof(finalStatistics)) == 0 &&
+                finalStatistics.sample_rate_hz == kSampleRate &&
+                finalStatistics.capture_frames == kTotalSamples / kFrameSamples &&
+                finalStatistics.reverse_frames == kTotalSamples / kFrameSamples &&
+                finalStatistics.stream_delay_ms == 40 &&
+                finalStatistics.noise_suppression_enabled == 0 &&
+                finalStatistics.gain_control_enabled == 0,
+            "active-reference diagnostic must retain complete frames and NS=0/AGC=0/delay=40");
   }
   return output;
 }
@@ -175,6 +195,108 @@ NearProjection measureNearProjection(const std::vector<double>& nearSignal,
   return best;
 }
 
+// Diagnostic-only helpers leave the original acceptance measurement unchanged.
+NearProjection measureDiagnosticProjectionAtLag(const std::vector<double>& nearSignal,
+                                                 const std::vector<double>& output,
+                                                 size_t start, size_t end, size_t alignment) {
+  require(start >= alignment && start < end && end <= nearSignal.size() && end <= output.size(),
+          "diagnostic projection window must be in bounds");
+  double nearEnergy = 0.0;
+  double outputEnergy = 0.0;
+  double crossEnergy = 0.0;
+  for (size_t sampleIndex = start; sampleIndex < end; ++sampleIndex) {
+    const double nearSample = nearSignal[sampleIndex - alignment];
+    const double outputSample = output[sampleIndex];
+    nearEnergy += nearSample * nearSample;
+    outputEnergy += outputSample * outputSample;
+    crossEnergy += nearSample * outputSample;
+  }
+  require(nearEnergy > 0.0 && std::isfinite(nearEnergy) &&
+              std::isfinite(outputEnergy) && std::isfinite(crossEnergy),
+          "diagnostic projection requires finite energy and nonzero near input");
+  return {crossEnergy / nearEnergy,
+          crossEnergy / std::sqrt(std::max(nearEnergy * outputEnergy, 1.0)), alignment};
+}
+
+NearProjection measureDiagnosticBestProjection(const std::vector<double>& nearSignal,
+                                                const std::vector<double>& output,
+                                                size_t start, size_t end) {
+  NearProjection best;
+  for (size_t alignment = 0; alignment <= 480; ++alignment) {
+    const auto current = measureDiagnosticProjectionAtLag(nearSignal, output, start, end, alignment);
+    if (current.correlation > best.correlation) {
+      best = current;
+    }
+  }
+  return best;
+}
+
+void verifyDiagnosticProjection() {
+  constexpr size_t kKnownDelay = 128;
+  constexpr double kKnownGain = 0.625;
+  std::vector<double> input(4096);
+  std::vector<double> output(input.size(), 0.0);
+  uint32_t generatorState = 0x89abcdefu;
+  for (size_t sampleIndex = 0; sampleIndex < input.size(); ++sampleIndex) {
+    generatorState = generatorState * 1664525u + 1013904223u;
+    input[sampleIndex] = static_cast<double>(generatorState >> 16) - 32768.0;
+    if (sampleIndex >= kKnownDelay) {
+      output[sampleIndex] = kKnownGain * input[sampleIndex - kKnownDelay];
+    }
+  }
+  const auto fixed = measureDiagnosticProjectionAtLag(input, output, 512, input.size(), kKnownDelay);
+  const auto best = measureDiagnosticBestProjection(input, output, 512, input.size());
+  require(std::abs(fixed.gain - kKnownGain) < 1.0e-12 &&
+              std::abs(fixed.correlation - 1.0) < 1.0e-12 &&
+              best.alignment_samples == kKnownDelay &&
+              std::abs(best.gain - kKnownGain) < 1.0e-12 &&
+              std::abs(best.correlation - 1.0) < 1.0e-12,
+          "diagnostic projection must recover known gain and 128-sample delay");
+}
+
+void reportNormalDiagnostics(const std::vector<double>& render,
+                              const std::vector<double>& wrongReference,
+                              const std::vector<double>& echo,
+                              const std::vector<double>& nearSignal,
+                              const std::vector<double>& doubleTalkOutput) {
+  const double nearEnergy = measureEnergy(nearSignal, kAdaptationSamples, kTotalSamples);
+  const double echoEnergy = measureEnergy(echo, kAdaptationSamples, kTotalSamples);
+  require(nearEnergy > 0.0 && echoEnergy > 0.0, "diagnostic near/echo inputs must be nonzero");
+  std::printf("DIAGNOSTIC raw input [20,28)s: near_energy=%.9e echo_energy=%.9e near_to_echo_db=%.6f\n",
+              nearEnergy, echoEnergy, 10.0 * std::log10(nearEnergy / echoEnergy));
+
+  // The first diagnostic bin includes onset. Match the actually submitted
+  // near input there; this copy never replaces the original fixture/metric.
+  auto activeNearSignal = nearSignal;
+  std::fill(activeNearSignal.begin(), activeNearSignal.begin() + kAdaptationSamples, 0.0);
+  for (size_t secondIndex = 0; secondIndex < 8; ++secondIndex) {
+    const size_t start = kAdaptationSamples + secondIndex * kSampleRate;
+    const size_t end = start + kSampleRate;
+    const auto best = measureDiagnosticBestProjection(activeNearSignal, doubleTalkOutput, start, end);
+    const auto fixed = measureDiagnosticProjectionAtLag(activeNearSignal, doubleTalkOutput, start, end, 128);
+    const double windowNearEnergy = measureEnergy(nearSignal, start, end);
+    const double windowEchoEnergy = measureEnergy(echo, start, end);
+    std::printf("DIAGNOSTIC baseline double-talk [%zu,%zu)s: best_gain=%.6f best_corr=%.6f best_lag=%zu fixed128_gain=%.6f near_to_echo_db=%.6f\n",
+                20 + secondIndex, 21 + secondIndex, best.gain, best.correlation,
+                best.alignment_samples, fixed.gain,
+                10.0 * std::log10(windowNearEnergy / windowEchoEnergy));
+  }
+
+  const std::array<CaptureMode, 2> modes{{CaptureMode::ActiveReferenceNearAfterSilence,
+      CaptureMode::ActiveReferenceNearAfterEchoTraining}};
+  const std::array<const char*, 2> labels{{"A active-reference silence-then-near/noecho",
+      "B active-reference echo-training-then-near/noecho"}};
+  for (size_t scenarioIndex = 0; scenarioIndex < modes.size(); ++scenarioIndex) {
+    const auto output = runProcessor(render, wrongReference, echo, nearSignal,
+        ReferenceMode::Matched, modes[scenarioIndex], FaultMode::None, false);
+    const auto projection = measureNearProjection(nearSignal, output);
+    std::printf("DIAGNOSTIC %s original window [21,27.97)s: gain=%.6f corr=%.6f lag=%zu\n",
+                labels[scenarioIndex], projection.gain, projection.correlation,
+                projection.alignment_samples);
+  }
+  std::fflush(stdout);
+}
+
 }  // namespace
 
 int main(int argumentCount, char** arguments) {
@@ -198,6 +320,9 @@ int main(int argumentCount, char** arguments) {
   }
   require(faultMode != FaultMode::None || (!disableMutation && !invalidConfiguration),
           "rejection controls require a named mutation");
+  if (faultMode == FaultMode::None) {
+    verifyDiagnosticProjection();
+  }
   const auto render = generateSignal(0x13579bdfu, 1.7);
   const auto wrongReference = generateSignal(0x8642ace0u, 2.3);
   const auto nearSignal = generateSignal(0xc0ffee11u, 3.1);
@@ -235,6 +360,9 @@ int main(int argumentCount, char** arguments) {
       doubleTalk.gain >= nearOnly.gain * 0.60 && doubleTalk.correlation >= 0.45 &&
       doubleTalk.correlation >= nearOnly.correlation * 0.55;
   const bool matchedEchoCancelled = matchedAttenuation >= 15.0;
+  if (faultMode == FaultMode::None) {
+    reportNormalDiagnostics(render, wrongReference, echo, nearSignal, doubleTalkOutput);
+  }
   require(std::isfinite(matchedAttenuation) && std::isfinite(disconnectedAttenuation) &&
               std::isfinite(wrongAttenuation), "finite echo measurements");
   require(disconnectedAttenuation < 5.0, "without reverse attenuation must remain below 5 dB");
