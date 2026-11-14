@@ -1,5 +1,11 @@
 # Native API implementation report - 2026-11-14
 
+Current controller status: native repair and diagnostics are committed and
+pushed; real API/statistics tests passed, but double-talk preservation failed.
+See the final observed-investigation section and the execution ledger for
+current run/artifact evidence. Earlier sections preserve historical task-local
+checkpoints, not a claim that native execution is still pending everywhere.
+
 ## Scope and status
 
 Implementation is present in the working tree based on HEAD 55aa915 on
@@ -450,6 +456,61 @@ These are syntax/Python checks, not native linked runtime or effect acceptance.
 The parent must review the narrow diff and run the actual host executable to
 obtain the new numbers. No commit, staging, push, gh/CI or remote operation was
 performed; no PCM was saved.
+
+## Observed numeric investigation on the real library
+
+The controller pushed diagnostic-only commit
+c2244c3f85418eb07b0a7cadbe5c8d6488ad5822 and dispatched run 43582805215:
+https://github.com/restia-aozora/webrtc-apm-deps-build/actions/runs/43582805215
+
+Host job 132410943571 built and ran the actual pinned library, including the
+new known-gain/delay sanity and both independent active-reference scenarios.
+All diagnostic checks completed; the original double-talk assertion still
+failed. API smoke/statistics passed, zero-output detection passed, and the
+disconnect mutation continued to reject the baseline preservation failure.
+Host result remains 3 passed, 2 failed. No acceptance threshold was changed.
+
+Original effect numbers exactly reproduced: matched echo 18.881 dB,
+disconnected 0.133 dB, wrong reference 0.134 dB, near-only gain/correlation
+0.930/0.941, double-talk 0.299/0.598. Input near-to-echo energy ratio over
+[20,28)s was +4.542692 dB; near input was not weaker than echo on average.
+
+Per-second original double-talk projections (gain, correlation):
+
+- [20,21): 0.516428, 0.740973
+- [21,22): 0.404664, 0.671830
+- [22,23): 0.291857, 0.591849
+- [23,24): 0.246466, 0.558908
+- [24,25): 0.281800, 0.582159
+- [25,26): 0.347979, 0.631808
+- [26,27): 0.298484, 0.610173
+- [27,28): 0.220182, 0.532390
+
+All eight best lags were exactly 128 samples; the fixed-128 gain equaled each
+best-lag gain. The failure was sustained, not explained by a one-time onset
+recovery or the tested scalar latency alignment.
+
+New numeric-only original-window controls, both at lag 128 samples:
+
+- A, active reference plus silence then near/noecho: gain 0.929833,
+  correlation 0.941168.
+- B, active reference plus echo training then near/noecho: gain 0.878737,
+  correlation 0.917557.
+
+These controls narrow the issue to behavior while echo and independent near
+coexist in this fixture. Reference activation alone and training history alone
+do not explain the much lower 0.299 projection. They do NOT identify the exact
+internal suppressor/filter mechanism, prove a wrapper regression, establish
+human speech quality, or prove the phone false-onset root cause. No production
+configuration, capture PCM path, VAD, delay, upstream or thresholds were
+changed. Further production tuning requires a separate evidence-backed design;
+the current artifact is not accepted for replacing application binaries.
+
+Fresh controller verification before this run: Python 41 tests, 40 passed and
+one pre-existing Linux-only skip; ARM64/ARMv7/x86 NDK syntax checks all exit 0.
+Directed independent review found no new defects and confirmed original
+criteria/mutation protocol were retained. ReadLints returned zero diagnostics
+but totalFiles=0, so it is not evidence of effective IDE lint coverage.
 
 After the final frame/configuration guard was added, all three ABI syntax
 commands were repeated and returned exit0. The final Python rerun reported

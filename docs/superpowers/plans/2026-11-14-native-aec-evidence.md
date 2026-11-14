@@ -64,7 +64,8 @@ This plan is also the execution ledger; do not repeat completed tasks.
 - [x] Final cross-boundary source review and fresh application/Python regression.
 - [x] Push reviewed commits and dispatch Android ARM64/ARMv7/x86 packaging.
 - [x] Verify run and archive integrity; retain failed host quality gate below.
-- [ ] Investigate double-talk preservation failure without changing acceptance.
+- [x] Run bounded numeric investigation without changing acceptance.
+- [ ] Establish exact internal double-talk cause and a separately reviewed fix.
 - [ ] Pass native effect gate before any application binary replacement.
 
 ## Evidence and limitations
@@ -189,3 +190,41 @@ alignment with actual NDK readelf/nm tools; exit 0. Library SHA-256 values:
 Archive integrity/packaging success does not satisfy the failed effect gate.
 No application .so has been replaced, no Android JNI/APK runtime was tested,
 and the reported phone false onset has NOT been shown fixed.
+
+### Final bounded investigation checkpoint: still not accepted
+
+Diagnostic-only commit c2244c3f85418eb07b0a7cadbe5c8d6488ad5822 retained all
+original fixture inputs, metrics, thresholds and mutation verdicts. Independent
+review found no new defects. Fresh controller NDK syntax checks passed for all
+three ABIs; Python had 40 passed and one existing Linux-only skip. IDE lint
+returned totalFiles=0, so no effective lint coverage is claimed.
+
+Run 43582805215, host job 132410943571, reproduced the same original effect
+numbers and the same 3-pass/2-fail outcome. Numeric helper sanity completed.
+The near input was +4.543 dB above echo by average energy. All eight 1-second
+double-talk windows selected lag 128, matching fixed-lag measurements; gains
+fell from 0.516 in the first second to 0.220 in the last, not a simple onset
+recovery or changing latency. With active reference but no capture echo, gain
+was 0.929833; after echo training followed by removing capture echo it was
+0.878737. Thus reference activation/history alone do not explain the 0.299
+double-talk projection. The exact internal mechanism and relevance to real
+speech/phone acoustics remain unproven. See the implementation report's final
+section for all measured windows and limits. No further production tuning was
+attempted within the approved no-configuration-change scope.
+
+Final build page:
+https://github.com/restia-aozora/webrtc-apm-deps-build/actions/runs/43582805215
+
+Android job 132410943451 passed, all three ABIs; lightweight checks run
+43582784768 also passed. Artifact webrtc-apm-android-43582805215 has id
+14108568877 and is downloaded at ignored
+.work/delivery-43582805215/webrtc-apm-android.zip. SHA-256:
+621800e05ee3a423d84e6ede43c078c6765be7077f999a5c540dde193649820d.
+
+The same full local archive/manifest/hash/C+JNI/ELF/16-KB checks passed again
+with wrapperCommit c2244c3f85418eb07b0a7cadbe5c8d6488ad5822; exit 0. Each
+ABI library hash exactly matches the earlier 2e860a3 build listed above, as
+expected for a test/docs-only change. Overall workflow failure is preserved
+because the host effect gate failed. This is an inspected experimental build,
+NOT an accepted repair of the reported phone behavior. No application library
+was replaced and no Android device/JNI/APK runtime was exercised.
